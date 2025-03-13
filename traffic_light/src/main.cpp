@@ -1,11 +1,14 @@
+#include <Arduino.h>
 #include <TaskScheduler.h>
+#include <PinChangeInterrupt.h>
 
 // LED 핀 정의
 const int RED_LED = 13;
 const int YELLOW_LED = 12;
 const int GREEN_LED = 11;
 const int SWITCH_PIN1 = 2;  // 스위치 1번 (Emergency)
-const int SWITCH_PIN2 = 3;  // 스위치 2번
+const int SWITCH_PIN2 = 3;  // 스위치 2번 (caution)
+const int SWITCH_PIN3 = 4;  // 스위치 3번 (led on/off)
 
 // TaskScheduler 객체 생성
 Scheduler runner;
@@ -16,6 +19,7 @@ void task2();
 void task3();
 void task4();
 void task5();
+void task6();
 
 // Task 객체 생성 (6초 주기로 실행)
 Task t1(6000, TASK_FOREVER, &task1, &runner, false);
@@ -23,6 +27,7 @@ Task t2(6000, TASK_FOREVER, &task2, &runner, false);
 Task t3(6000, TASK_FOREVER, &task3, &runner, false);
 Task t4(6000, TASK_FOREVER, &task4, &runner, false);
 Task t5(6000, TASK_FOREVER, &task5, &runner, false);
+Task t6(500,TASK_FOREVER, &task6, &runner, false);  //버튼 3번의 모든 led 깜빡임
 
 void setup() {
     pinMode(RED_LED, OUTPUT);
@@ -31,6 +36,7 @@ void setup() {
     
     pinMode(SWITCH_PIN1, INPUT_PULLUP);  // 내부 풀업 사용
     pinMode(SWITCH_PIN2, INPUT_PULLUP);  // 내부 풀업 사용
+    pinMode(SWITCH_PIN3, INPUT_PULLUP);  // 내부 풀업 사용
 
     // Task 시작
     t1.enableDelayed(1);      // 즉시 실행
@@ -41,8 +47,10 @@ void setup() {
 }
 
 void loop() {
-    bool switch1State = digitalRead(SWITCH_PIN1);  // HIGH(1): 안 눌림, LOW(0): 눌림
-    bool switch2State = digitalRead(SWITCH_PIN2);  // HIGH(1): 안 눌림, LOW(0): 눌림
+  
+    // bool switch1State = digitalRead(SWITCH_PIN1);  // HIGH(1): 안 눌림, LOW(0): 눌림
+    // bool switch2State = digitalRead(SWITCH_PIN2);  // HIGH(1): 안 눌림, LOW(0): 눌림
+    // bool switch3State = digitalRead(SWITCH_PIN3);  // HIGH(1): 안 눌림, LOW(0): 눌림
 
     if (!switch1State) {  // Emergency 버튼 눌림 (LOW)
         digitalWrite(RED_LED, HIGH);
@@ -54,13 +62,26 @@ void loop() {
         digitalWrite(YELLOW_LED, LOW);
         digitalWrite(GREEN_LED, LOW);
         runner.disableAll();  // 모든 작업 정지
+    } else if(!switch3State) {
+        runner.disableAll();  // 모든 작업 정지
+        t6.enable();
     } else {  // 기본 동작 수행
-        if (!t1.isEnabled()) {
+        if (!t1.isEnabled() && !t6.isEnabled()) {
             runner.enableAll();
         }
+        t6.disable();
     }
 
     runner.execute();  // Task 실행
+}
+
+void task6(){
+    static bool toggle = false;
+    toggle = !toggle;
+
+    digitalWrite(RED_LED, toggle);
+    digitalWrite(YELLOW_LED, toggle);
+    digitalWrite(GREEN_LED, toggle);
 }
 
 // ⏳ delay() 대신 millis() 기반 비동기 대기 함수
