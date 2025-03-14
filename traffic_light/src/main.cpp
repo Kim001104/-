@@ -3,62 +3,112 @@
 #include <PinChangeInterrupt.h>
 
 // LED 핀 정의
-const int RED_LED = 13;
-const int YELLOW_LED = 12;
-const int GREEN_LED = 11;
-const int SWITCH_PIN1 = 2;  // Emergency (하드웨어 인터럽트 지원)
-const int SWITCH_PIN2 = 3;  // Caution (하드웨어 인터럽트 지원)
-const int SWITCH_PIN3 = 4;  // LED Blink (PinChangeInterrupt 사용)
+const int RED_LED = 11;
+const int YELLOW_LED = 10;
+const int GREEN_LED = 9;
+const int SWITCH_PIN1 = 2;  // 긴급 모드 (Emergency)
+const int SWITCH_PIN2 = 3;  // 주의 모드 (Caution)
+const int SWITCH_PIN3 = 4;  // 깜빡임 모드 (Blink)
+const int POTENTIOMETER_PIN = A0; // 가변저항 핀
+
+// 상태 변수
+volatile bool emergencyMode = false;
+volatile bool cautionMode = false;
+volatile bool blinkMode = false;
+unsigned long lastBlinkTime = 0;
+const unsigned long blinkInterval = 300;
+bool ledState = false;
+
+int potValue = analogRead(POTENTIOMETER_PIN);  // 0~1023 읽기
+int brightness = map(potValue, 0, 1023, 0, 255);  // 0~255 변환
 
 // TaskScheduler 객체 생성
 Scheduler runner;
 
-// 스위치 상태 변수
-volatile bool emergencyMode = false;
-volatile bool cautionMode = false;
-volatile bool blinkMode = false;
-volatile unsigned long lastInterruptTime = 0;  // 디바운싱 타이머
-
-// 인터럽트 서비스 루틴(ISR) 함수
-void emergencyISR();
-void cautionISR();
-void blinkISR();
-
-// 개별 작업 선언
+// 기본 동작 Task
 void task1();
 void task2();
 void task3();
 void task4();
 void task5();
-void task6();
+void handleBlink();
 
-// Task 객체 생성 (6초 주기)
+// Task 객체 생성
 Task t1(6000, TASK_FOREVER, &task1, &runner, false);
 Task t2(6000, TASK_FOREVER, &task2, &runner, false);
 Task t3(6000, TASK_FOREVER, &task3, &runner, false);
 Task t4(6000, TASK_FOREVER, &task4, &runner, false);
 Task t5(6000, TASK_FOREVER, &task5, &runner, false);
-Task t6(500, TASK_FOREVER, &task6, &runner, false);  // LED 깜빡임 (0.5초 간격)
+
+// 긴급 모드 ISR (스위치 1 - 빨간불 유지)
+void emergencyISR() {
+    if (digitalRead(SWITCH_PIN1) == LOW) {  // 스위치가 눌렸을 때 (FALLING)
+        emergencyMode = true;
+        runner.disableAll();  // 모든 Task 일시 정지
+        Serial.println("Emergency Mode Enabled");
+    } else {  // 스위치에서 손을 뗐을 때 (RISING)
+        emergencyMode = false;
+        runner.enableAll();  // 기본 동작 재개
+        Serial.println("Emergency Mode Disabled");
+    }
+}
+
+// 주의 모드 ISR (스위치 2 - 모든 LED 끄기)
+void cautionISR() {
+    if (digitalRead(SWITCH_PIN2) == LOW) {  // 스위치가 눌렸을 때 (FALLING)
+        cautionMode = true;
+        runner.disableAll();
+        Serial.println("Caution Mode Enabled");
+    } else {  // 스위치에서 손을 뗐을 때 (RISING)
+        cautionMode = false;
+        runner.enableAll();
+        Serial.println("Caution Mode Disabled");
+    }
+}
+
+// 깜빡임 모드 ISR (스위치 3 - 모든 LED 깜빡이기)
+void blinkISR() {
+    if (digitalRead(SWITCH_PIN3) == LOW) {  // 스위치가 눌렸을 때 (FALLING)
+        blinkMode = true;
+        runner.disableAll();
+        Serial.println("Blink Mode Enabled");
+    } else {  // 스위치에서 손을 뗐을 때 (RISING)
+        blinkMode = false;
+        runner.enableAll();
+        Serial.println("Blink Mode Disabled");
+    }
+}
+
+// 깜빡임 처리 (스위치 3)
+void handleBlink() {
+    unsigned long currentMillis = millis();
+
+    if (currentMillis - lastBlinkTime >= blinkInterval) {
+        lastBlinkTime = currentMillis;
+        ledState = !ledState;
+        digitalWrite(RED_LED, ledState);
+        digitalWrite(YELLOW_LED, ledState);
+        digitalWrite(GREEN_LED, ledState);
+    }
+}
 
 void setup() {
-    Serial.begin(9600);  // 디버깅을 위한 시리얼 통신 시작
-
+    Serial.begin(9600);
     pinMode(RED_LED, OUTPUT);
     pinMode(YELLOW_LED, OUTPUT);
     pinMode(GREEN_LED, OUTPUT);
-    
+
     pinMode(SWITCH_PIN1, INPUT_PULLUP);
     pinMode(SWITCH_PIN2, INPUT_PULLUP);
     pinMode(SWITCH_PIN3, INPUT_PULLUP);
+    pinMode(POTENTIOMETER_PIN, INPUT);
 
-    // 하드웨어 인터럽트 설정 (스위치 1, 2번)
     attachInterrupt(digitalPinToInterrupt(SWITCH_PIN1), emergencyISR, CHANGE);
     attachInterrupt(digitalPinToInterrupt(SWITCH_PIN2), cautionISR, CHANGE);
+    // ✅ digitalToPCINT()를 사용하여 PCINT 설정
+    attachPCINT(digitalPinToPCINT(SWITCH_PIN3), blinkISR, CHANGE);
 
-    // PinChangeInterrupt 설정 (스위치 3번)
-    attachPinChangeInterrupt(digitalPinToPCINT(SWITCH_PIN3), blinkISR, CHANGE);
-
-    // 기본 Task 시작
+    // Task 시작
     t1.enableDelayed(1);
     t2.enableDelayed(2000);
     t3.enableDelayed(2500);
@@ -67,112 +117,73 @@ void setup() {
 }
 
 void loop() {
-    if (emergencyMode) {  // Emergency 버튼 눌림
+
+
+    if (emergencyMode) {
+        // 긴급 모드: 빨간불 유지
         digitalWrite(RED_LED, HIGH);
-        digitalWrite(YELLOW_LED, LOW);
-        digitalWrite(GREEN_LED, LOW);
-        runner.disableAll();  // 모든 작업 정지
-        t6.disable();  // 깜빡임 중지
-    } else if (cautionMode) {  // Caution 버튼 눌림
-        digitalWrite(RED_LED, LOW);
-        digitalWrite(YELLOW_LED, LOW);
-        digitalWrite(GREEN_LED, LOW);
-        runner.disableAll();  // 모든 작업 정지
-        t6.disable();  // 깜빡임 중지
-    } else if (blinkMode) {  // LED 깜빡임 모드
-        runner.disableAll();  // 기존 Task 중단
-        if (!t6.isEnabled()) {
-            Serial.println("🔵 깜빡임 시작! (task6 활성화)");
-            t6.enable();  // LED 깜빡임 시작
-        }
-    } else {  // 기본 신호등 동작
-        if (!t1.isEnabled() && !t6.isEnabled()) {
-            runner.enableAll();
-            Serial.println("🟢 기본 신호등 모드 실행");
-        }
-        t6.disable();  // 깜빡임 중지
+        analogWrite(YELLOW_LED, 0);
+        analogWrite(GREEN_LED, 0);
+    } 
+    else if (cautionMode) {
+        // 주의 모드: 모든 LED OFF
+        analogWrite(RED_LED, 0);
+        analogWrite(YELLOW_LED, 0);
+        analogWrite(GREEN_LED, 0);
+    } 
+    else if (blinkMode) {
+        // 깜빡임 모드
+        handleBlink();
+    } 
+    else {
+        // 기본 신호등 동작
+        runner.execute();
     }
-
-    runner.execute();
 }
 
-// Emergency 스위치 인터럽트 핸들러
-void emergencyISR() {
-    emergencyMode = !digitalRead(SWITCH_PIN1);
-}
-
-// Caution 스위치 인터럽트 핸들러
-void cautionISR() {
-    cautionMode = !digitalRead(SWITCH_PIN2);
-}
-
-// LED 깜빡임 스위치 인터럽트 핸들러 (PinChangeInterrupt 사용)
-void blinkISR() {
-    unsigned long currentTime = millis();
-    if (currentTime - lastInterruptTime < 200) return;  // 디바운싱 (200ms)
-    lastInterruptTime = currentTime;
-
-    blinkMode = !blinkMode;  // 스위치를 누를 때마다 모드 변경
-    Serial.print("🟡 blinkMode 변경: ");
-    Serial.println(blinkMode ? "ON" : "OFF");
-}
-
-// 🛑 신호등 패턴
+// 1️⃣ 빨간불 (2초)
 void task1() {
-    digitalWrite(RED_LED, HIGH);
-    digitalWrite(YELLOW_LED, LOW);
-    digitalWrite(GREEN_LED, LOW);
+    analogWrite(RED_LED, 255);
+    analogWrite(YELLOW_LED, 0);
+    analogWrite(GREEN_LED, 0);
     delay(2000);
-    digitalWrite(RED_LED, LOW);
+    analogWrite(RED_LED, 0);
 }
 
+// 2️⃣ 노란불 (0.5초)
 void task2() {
-    digitalWrite(RED_LED, LOW);
-    digitalWrite(YELLOW_LED, HIGH);
-    digitalWrite(GREEN_LED, LOW);
+    analogWrite(RED_LED, 0);
+    analogWrite(YELLOW_LED, 255);
+    analogWrite(GREEN_LED, 0);
     delay(500);
-    digitalWrite(YELLOW_LED, LOW);
+    analogWrite(YELLOW_LED, 0);
 }
 
+// 3️⃣ 초록불 (2초)
 void task3() {
-    digitalWrite(RED_LED, LOW);
-    digitalWrite(YELLOW_LED, LOW);
-    digitalWrite(GREEN_LED, HIGH);
+    analogWrite(RED_LED, 0);
+    analogWrite(YELLOW_LED, 0);
+    analogWrite(GREEN_LED, 255);
     delay(2000);
-    digitalWrite(GREEN_LED, LOW);
+    analogWrite(GREEN_LED, 0);
 }
 
+// 4️⃣ 초록불 깜빡임 (1초 동안 3번)
 void task4() {
     for (int i = 0; i < 3; i++) {
-        digitalWrite(GREEN_LED, LOW);
+        analogWrite(GREEN_LED, 0);
         delay(250);
-        digitalWrite(GREEN_LED, HIGH);
+        analogWrite(GREEN_LED, 255);
         delay(250);
     }
-    digitalWrite(GREEN_LED, LOW);
+    analogWrite(GREEN_LED, 0);
 }
 
+// 5️⃣ 노란불 (0.5초)
 void task5() {
-    digitalWrite(RED_LED, LOW);
-    digitalWrite(YELLOW_LED, HIGH);
-    digitalWrite(GREEN_LED, LOW);
+    analogWrite(RED_LED, 0);
+    analogWrite(YELLOW_LED, 255);
+    analogWrite(GREEN_LED, 0);
     delay(500);
-    digitalWrite(YELLOW_LED, LOW);
-}
-
-// 🟢 **LED 깜빡임 모드 (0.5초마다 ON/OFF)**
-void task6() {
-    static bool toggle = false;
-    toggle = !toggle;
-
-    if (blinkMode) {
-        digitalWrite(RED_LED, toggle);
-        digitalWrite(YELLOW_LED, toggle);
-        digitalWrite(GREEN_LED, toggle);
-    } else {
-        digitalWrite(RED_LED, LOW);
-        digitalWrite(YELLOW_LED, LOW);
-        digitalWrite(GREEN_LED, LOW);
-        t6.disable();  // 깜빡임 중지
-    }
+    analogWrite(YELLOW_LED, 0);
 }
